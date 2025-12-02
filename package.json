@@ -1,0 +1,51 @@
+{
+  "name": "markdown-preview-extension",
+  "displayName": "Markdown Preview Extension",
+  "description": "A custom markdown preview extension for VS Code",
+  "version": "1.0.0",
+  "publisher": "ahmad",
+
+  "repository": {
+    "type": "git",
+    "url": "https://example.com/repo.git"
+  },
+
+  "engines": {
+    "vscode": "^1.106.0"
+  },
+
+  "main": "./out/extension.js",
+
+  "activationEvents": [
+    "onCommand:markdown-preview.openPreview"
+  ],
+
+  "contributes": {
+    "commands": [
+      {
+        "command": "markdown-preview.openPreview",
+        "title": "Open Markdown Preview"
+      }
+    ]
+  },
+
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "package": "vsce package",
+    "build": "npm run compile"
+  },
+
+  "dependencies": {
+    "marked": "^17.0.1"
+  },
+
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "@types/vscode": "^1.106.1",
+    "ts-loader": "^9.5.4",
+    "typescript": "^5.9.3",
+    "webpack": "^5.103.0",
+    "webpack-cli": "^6.0.1"
+  }
+}

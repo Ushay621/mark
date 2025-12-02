@@ -1,0 +1,16 @@
+# Exclude development folders
+.vscode/
+.vscode-test/
+
+# DO NOT exclude src/
+# because your compiled JS goes inside src/
+
+# Exclude git files
+.git/
+.gitignore
+
+# Exclude maps only if you don’t need them
+**/*.map
+
+# Exclude logs
+*.log
