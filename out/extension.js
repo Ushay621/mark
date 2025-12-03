@@ -33,74 +33,36 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.PreviewManager = void 0;
+exports.activate = activate;
+exports.deactivate = deactivate;
 const vscode = __importStar(require("vscode"));
-const marked_1 = require("marked");
-class PreviewManager {
-    constructor(context) {
-        this.context = context;
-    }
-    // ---- OPEN PREVIEW WINDOW ----
-    openPreview() {
-        if (this.panel) {
-            this.panel.reveal();
+const previewManager_1 = require("./previewManager");
+let previewManager;
+function activate(context) {
+    console.log('Advanced Markdown Preview extension is now active');
+    previewManager = new previewManager_1.PreviewManager(context);
+    // Register command to open preview
+    const openPreviewCommand = vscode.commands.registerCommand('markdown-preview.openPreview', () => {
+        const editor = vscode.window.activeTextEditor;
+        if (!editor) {
+            vscode.window.showErrorMessage('No active editor found');
             return;
         }
-        this.panel = vscode.window.createWebviewPanel("markdownPreview", "Markdown Preview", vscode.ViewColumn.Beside, {
-            enableScripts: true,
-            retainContextWhenHidden: true,
-        });
-        this.loadHTML();
-        this.updateContent(vscode.window.activeTextEditor?.document);
-        this.panel.onDidDispose(() => {
-            this.panel = undefined;
-        });
-    }
-    // ---- LOAD PREVIEW.HTML ----
-    async loadHTML() {
-        const htmlUri = vscode.Uri.joinPath(this.context.extensionUri, "src", "webview", "preview.html");
-        const bytes = await vscode.workspace.fs.readFile(htmlUri);
-        const htmlText = new TextDecoder().decode(bytes);
-        this.panel.webview.html = htmlText;
-        this.updateTheme();
-    }
-    // ---- UPDATE HTML WITH MARKDOWN ----
-    updateContent(document) {
-        if (!this.panel || !document)
+        if (editor.document.languageId !== 'markdown') {
+            vscode.window.showErrorMessage('Active file is not a Markdown file');
             return;
-        const md = document.getText();
-        const html = (0, marked_1.marked)(md);
-        this.panel.webview.postMessage({
-            type: "update",
-            html: html,
-        });
-    }
-    // ---- SYNC DARK / LIGHT THEME ----
-    updateTheme() {
-        if (!this.panel)
-            return;
-        const theme = vscode.window.activeColorTheme.kind ===
-            vscode.ColorThemeKind.Dark
-            ? "dark"
-            : "light";
-        this.panel.webview.postMessage({
-            type: "theme",
-            theme,
-        });
-    }
-    // ---- SYNC SCROLL ----
-    syncScroll(editor) {
-        if (!this.panel)
-            return;
-        const firstLine = editor.visibleRanges[0].start.line;
-        this.panel.webview.postMessage({
-            type: "scroll",
-            line: firstLine,
-        });
-    }
-    dispose() {
-        this.panel?.dispose();
+        }
+        previewManager.showPreview(editor);
+    });
+    // Register command to toggle preview
+    const togglePreviewCommand = vscode.commands.registerCommand('markdown-preview.togglePreview', () => {
+        previewManager.togglePreview();
+    });
+    context.subscriptions.push(openPreviewCommand, togglePreviewCommand, previewManager);
+}
+function deactivate() {
+    if (previewManager) {
+        previewManager.dispose();
     }
 }
-exports.PreviewManager = PreviewManager;
 //# sourceMappingURL=extension.js.map

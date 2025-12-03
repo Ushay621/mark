@@ -1,16 +1,12 @@
-# Exclude development folders
-.vscode/
-.vscode-test/
-
-# DO NOT exclude src/
-# because your compiled JS goes inside src/
-
-# Exclude git files
-.git/
+.vscode/**
+.vscode-test/**
+src/**
 .gitignore
-
-# Exclude maps only if you don’t need them
+.yarnrc
+vsc-extension-quickstart.md
+**/tsconfig.json
+**/.eslintrc.json
 **/*.map
-
-# Exclude logs
-*.log
+**/*.ts
+node_modules/**
+*.vsix

@@ -1,51 +1,66 @@
 {
-  "name": "markdown-preview-extension",
-  "displayName": "Markdown Preview Extension",
-  "description": "A custom markdown preview extension for VS Code",
+  "name": "advanced-markdown-preview",
+  "displayName": "Advanced Markdown Live Preview",
+  "description": "Markdown preview with inverted theme (dark editor → light preview, light editor → dark preview)",
   "version": "1.0.0",
-  "publisher": "ahmad",
-
+  "engines": {
+    "vscode": "^1.75.0"
+  },
   "repository": {
     "type": "git",
-    "url": "https://example.com/repo.git"
+    "url": "https://github.com/Ushay621/mark.git"
   },
-
-  "engines": {
-    "vscode": "^1.106.0"
-  },
-
-  "main": "./out/extension.js",
-
-  "activationEvents": [
-    "onCommand:markdown-preview.openPreview"
+  "categories": [
+    "Other"
   ],
-
+  "activationEvents": [
+    "onLanguage:markdown"
+  ],
+  "main": "./out/extension.js",
   "contributes": {
     "commands": [
       {
         "command": "markdown-preview.openPreview",
-        "title": "Open Markdown Preview"
+        "title": "Open Preview to the Side",
+        "category": "Markdown Preview",
+        "icon": "$(open-preview)"
       }
-    ]
+    ],
+    "keybindings": [
+      {
+        "command": "markdown-preview.openPreview",
+        "key": "ctrl+shift+m",
+        "mac": "cmd+shift+m",
+        "when": "editorLangId == markdown"
+      }
+    ],
+    "menus": {
+      "editor/title": [
+        {
+          "command": "markdown-preview.openPreview",
+          "when": "editorLangId == markdown",
+          "group": "navigation"
+        }
+      ]
+    }
   },
-
   "scripts": {
+    "vscode:prepublish": "npm run compile",
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
-    "package": "vsce package",
-    "build": "npm run compile"
+    "pretest": "npm run compile"
   },
-
-  "dependencies": {
-    "marked": "^17.0.1"
-  },
-
   "devDependencies": {
-    "@types/node": "^24.10.1",
-    "@types/vscode": "^1.106.1",
-    "ts-loader": "^9.5.4",
-    "typescript": "^5.9.3",
-    "webpack": "^5.103.0",
-    "webpack-cli": "^6.0.1"
+    "@types/marked": "^5.0.0",
+    "@types/node": "^18.0.0",
+    "@types/turndown": "^5.0.6",
+    "@types/vscode": "^1.75.0",
+    "typescript": "^5.0.0"
+  },
+  "dependencies": {
+    "highlight.js": "^11.9.0",
+    "marked": "^9.1.6",
+    "turndown": "^7.2.2",
+    "turndown-plugin-gfm": "^1.0.2"
   }
 }

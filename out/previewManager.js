@@ -32,129 +32,904 @@ var __importStar = (this && this.__importStar) || (function () {
         return result;
     };
 })();
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.PreviewManager = void 0;
 const vscode = __importStar(require("vscode"));
 const marked_1 = require("marked");
-const styles_1 = require("./webview/styles");
+const highlight_js_1 = __importDefault(require("highlight.js"));
+const path = __importStar(require("path"));
+const turndown_1 = __importDefault(require("turndown"));
 class PreviewManager {
     constructor(context) {
+        this.disposables = [];
+        this.isEditMode = false;
+        this.lastHtmlContent = '';
         this.context = context;
+        this.setupMarked();
+        this.turndownService = this.setupTurndown();
+        this.registerListeners();
     }
-    openPreview() {
-        const editor = vscode.window.activeTextEditor;
-        if (!editor || editor.document.languageId !== 'markdown') {
-            vscode.window.showWarningMessage('Please open a Markdown file first.');
-            return;
-        }
-        if (this.panel) {
-            this.panel.reveal(vscode.ViewColumn.Beside);
-        }
-        else {
-            this.panel = vscode.window.createWebviewPanel('markdownPreview', 'Markdown Preview', vscode.ViewColumn.Beside, {
-                enableScripts: true,
-                retainContextWhenHidden: true,
-            });
-            this.panel.onDidDispose(() => {
-                this.panel = undefined;
-            });
-        }
-        this.currentDocument = editor.document;
-        this.updateContent(editor.document);
+    setupTurndown() {
+        const turndownService = new turndown_1.default({
+            headingStyle: 'atx',
+            hr: '---',
+            bulletListMarker: '-',
+            codeBlockStyle: 'fenced',
+            emDelimiter: '_',
+            strongDelimiter: '**',
+            linkStyle: 'inlined'
+        });
+        // Add GitHub Flavored Markdown support manually
+        this.addGfmSupport(turndownService);
+        // Custom rules for better conversion
+        turndownService.addRule('previewImages', {
+            filter: ['img'],
+            replacement: function (content, node) {
+                const img = node;
+                const alt = img.alt || '';
+                const src = img.src || '';
+                const title = img.title || '';
+                return title ? `![${alt}](${src} "${title}")` : `![${alt}](${src})`;
+            }
+        });
+        turndownService.addRule('codeBlocks', {
+            filter: (node) => {
+                // Return boolean only, not null
+                return node.nodeName === 'PRE' &&
+                    node.firstChild !== null &&
+                    node.firstChild.nodeName === 'CODE';
+            },
+            replacement: function (content, node) {
+                const code = node;
+                const codeElement = code.querySelector('code');
+                const language = Array.from(codeElement?.classList || [])
+                    .find(cls => cls.startsWith('language-'))?.replace('language-', '') || '';
+                const codeContent = codeElement?.textContent || '';
+                return `\`\`\`${language}\n${codeContent}\n\`\`\``;
+            }
+        });
+        return turndownService;
     }
-    updateContent(document) {
-        if (!this.panel || document.languageId !== 'markdown') {
-            return;
-        }
-        this.currentDocument = document;
-        const content = document.getText();
-        const html = this.renderMarkdown(content);
-        this.panel.webview.html = this.getWebviewContent(html);
-    }
-    updateTheme() {
-        if (!this.panel || !this.currentDocument) {
-            return;
-        }
-        this.updateContent(this.currentDocument);
-    }
-    syncScroll(editor) {
-        if (!this.panel || !editor.visibleRanges.length) {
-            return;
-        }
-        const range = editor.visibleRanges[0];
-        const totalLines = editor.document.lineCount;
-        const scrollPercentage = range.start.line / totalLines;
-        this.panel.webview.postMessage({
-            command: 'scroll',
-            percentage: scrollPercentage,
+    addGfmSupport(turndownService) {
+        // Add GitHub Flavored Markdown support manually
+        turndownService.addRule('strikethrough', {
+            filter: ['del', 's'],
+            replacement: function (content) {
+                return '~~' + content + '~~';
+            }
+        });
+        turndownService.addRule('taskListItems', {
+            filter: (node) => {
+                // Check if it's an input checkbox inside an LI
+                if (node.nodeName !== 'INPUT')
+                    return false;
+                const input = node;
+                if (input.type !== 'checkbox')
+                    return false;
+                if (!node.parentNode)
+                    return false;
+                return node.parentNode.nodeName === 'LI';
+            },
+            replacement: function (content, node) {
+                const input = node;
+                return (input.checked ? '[x]' : '[ ]') + ' ';
+            }
+        });
+        turndownService.addRule('tables', {
+            filter: ['table'],
+            replacement: function (content, node) {
+                // Simple table conversion
+                const table = node;
+                const rows = Array.from(table.rows);
+                const markdownRows = [];
+                if (rows.length === 0)
+                    return '';
+                // Header row
+                const headerCells = Array.from(rows[0]?.cells || []);
+                const headerRow = '| ' + headerCells.map(cell => cell.textContent?.trim() || '').join(' | ') + ' |';
+                markdownRows.push(headerRow);
+                // Separator row
+                const separatorRow = '| ' + headerCells.map(() => '---').join(' | ') + ' |';
+                markdownRows.push(separatorRow);
+                // Data rows
+                for (let i = 1; i < rows.length; i++) {
+                    const cells = Array.from(rows[i].cells);
+                    const dataRow = '| ' + cells.map(cell => cell.textContent?.trim() || '').join(' | ') + ' |';
+                    markdownRows.push(dataRow);
+                }
+                return markdownRows.join('\n') + '\n';
+            }
         });
     }
-    renderMarkdown(content) {
+    setupMarked() {
+        // Configure marked with custom renderer for code highlighting
+        const renderer = new marked_1.marked.Renderer();
+        const originalCode = renderer.code.bind(renderer);
+        renderer.code = function (code, language, isEscaped) {
+            if (language && highlight_js_1.default.getLanguage(language)) {
+                try {
+                    const highlighted = highlight_js_1.default.highlight(code, { language }).value;
+                    return `<pre><code class="hljs language-${language}">${highlighted}</code></pre>`;
+                }
+                catch (err) {
+                    console.error('Highlight error:', err);
+                }
+            }
+            // Auto-detect language if not specified
+            try {
+                const highlighted = highlight_js_1.default.highlightAuto(code).value;
+                return `<pre><code class="hljs">${highlighted}</code></pre>`;
+            }
+            catch (err) {
+                // Fallback to original renderer
+                return originalCode(code, language, isEscaped);
+            }
+        };
         marked_1.marked.setOptions({
+            renderer: renderer,
             breaks: true,
             gfm: true,
+            pedantic: false
         });
-        return marked_1.marked.parse(content);
     }
-    getWebviewContent(html) {
-        const theme = vscode.window.activeColorTheme.kind;
-        const isDarkEditor = theme === vscode.ColorThemeKind.Dark ||
-            theme === vscode.ColorThemeKind.HighContrast;
-        // Inverted theme
-        const styles = isDarkEditor ? (0, styles_1.getLightStyles)() : (0, styles_1.getDarkStyles)();
-        return `
-<!DOCTYPE html>
-<html>
+    registerListeners() {
+        // Listen to text document changes
+        this.disposables.push(vscode.workspace.onDidChangeTextDocument(e => {
+            if (this.panel && this.currentEditor && e.document === this.currentEditor.document) {
+                this.updatePreview();
+            }
+        }));
+        // Listen to active editor changes
+        this.disposables.push(vscode.window.onDidChangeActiveTextEditor(editor => {
+            if (editor && editor.document.languageId === 'markdown' && this.panel) {
+                this.currentEditor = editor;
+                this.updatePreview();
+            }
+        }));
+        // Listen to theme changes
+        this.disposables.push(vscode.window.onDidChangeActiveColorTheme(() => {
+            if (this.panel && this.currentEditor) {
+                this.updatePreview();
+            }
+        }));
+        // Listen to visible range changes (scroll)
+        this.disposables.push(vscode.window.onDidChangeTextEditorVisibleRanges(e => {
+            if (this.panel && this.currentEditor && e.textEditor === this.currentEditor) {
+                this.syncScroll();
+            }
+        }));
+        // Listen to document saves
+        this.disposables.push(vscode.workspace.onDidSaveTextDocument(doc => {
+            if (this.panel && this.currentEditor && doc === this.currentEditor.document) {
+                this.updatePreview();
+            }
+        }));
+    }
+    showPreview(editor) {
+        this.currentEditor = editor;
+        if (this.panel) {
+            this.panel.reveal(vscode.ViewColumn.Two);
+            this.updatePreview();
+        }
+        else {
+            this.createPreviewPanel();
+        }
+    }
+    togglePreview() {
+        if (this.panel) {
+            this.panel.dispose();
+            this.panel = undefined;
+            this.isEditMode = false;
+        }
+        else {
+            const editor = vscode.window.activeTextEditor;
+            if (editor && editor.document.languageId === 'markdown') {
+                this.showPreview(editor);
+            }
+        }
+    }
+    toggleEditMode() {
+        if (!this.panel)
+            return;
+        this.isEditMode = !this.isEditMode;
+        this.updatePreview();
+    }
+    createPreviewPanel() {
+        this.panel = vscode.window.createWebviewPanel('markdownPreview', 'Markdown Preview', vscode.ViewColumn.Two, {
+            enableScripts: true,
+            retainContextWhenHidden: true,
+            localResourceRoots: [
+                vscode.Uri.file(path.join(this.context.extensionPath, 'media')),
+                vscode.Uri.file(path.join(this.context.extensionPath, 'dist', 'webview'))
+            ]
+        });
+        this.panel.iconPath = vscode.Uri.file(path.join(this.context.extensionPath, 'media', 'preview-icon.svg'));
+        this.panel.onDidDispose(() => {
+            this.panel = undefined;
+            this.isEditMode = false;
+        });
+        // Handle messages from webview
+        this.panel.webview.onDidReceiveMessage(async (message) => {
+            switch (message.command) {
+                case 'alert':
+                    vscode.window.showInformationMessage(message.text);
+                    break;
+                case 'error':
+                    vscode.window.showErrorMessage(message.text);
+                    break;
+                case 'updateMarkdown':
+                    await this.updateEditorFromPreview(message.content);
+                    break;
+                case 'htmlChanged':
+                    this.lastHtmlContent = message.html;
+                    await this.updateEditorFromHtml(message.html);
+                    break;
+                case 'requestInitialContent':
+                    this.sendInitialContent();
+                    break;
+                case 'toggleEditMode':
+                    this.toggleEditMode();
+                    break;
+            }
+        }, undefined, this.disposables);
+        this.updatePreview();
+    }
+    sendInitialContent() {
+        if (!this.panel || !this.currentEditor)
+            return;
+        const text = this.currentEditor.document.getText();
+        const html = marked_1.marked.parse(text);
+        this.panel.webview.postMessage({
+            command: 'setInitialContent',
+            html: html,
+            isEditMode: this.isEditMode
+        });
+    }
+    async updateEditorFromHtml(html) {
+        if (!this.currentEditor)
+            return;
+        try {
+            // Convert HTML back to Markdown
+            let markdown = this.turndownService.turndown(html);
+            // Clean up the markdown
+            markdown = this.cleanupMarkdown(markdown);
+            await this.updateEditorFromPreview(markdown);
+        }
+        catch (error) {
+            console.error('Error converting HTML to Markdown:', error);
+            vscode.window.showErrorMessage(`Failed to convert HTML: ${error}`);
+        }
+    }
+    cleanupMarkdown(markdown) {
+        // Remove extra newlines
+        markdown = markdown.replace(/\n{3,}/g, '\n\n');
+        // Fix code block formatting
+        markdown = markdown.replace(/```\s*\n\s*```/g, '');
+        // Ensure proper heading formatting
+        markdown = markdown.replace(/^(#+)\s*$/gm, '');
+        return markdown.trim() + '\n';
+    }
+    updatePreview() {
+        if (!this.panel || !this.currentEditor) {
+            return;
+        }
+        const document = this.currentEditor.document;
+        const text = document.getText();
+        try {
+            const html = marked_1.marked.parse(text);
+            const isDarkEditor = this.isEditorThemeDark();
+            this.panel.webview.html = this.getWebviewContent(html, isDarkEditor, this.isEditMode);
+            // Update title with file name and mode
+            const modeText = this.isEditMode ? ' (Edit Mode)' : '';
+            this.panel.title = `Preview: ${path.basename(document.fileName)}${modeText}`;
+        }
+        catch (error) {
+            console.error('Error rendering markdown:', error);
+            vscode.window.showErrorMessage(`Failed to render markdown: ${error}`);
+        }
+    }
+    syncScroll() {
+        if (!this.panel || !this.currentEditor) {
+            return;
+        }
+        const visibleRange = this.currentEditor.visibleRanges[0];
+        if (!visibleRange) {
+            return;
+        }
+        const totalLines = this.currentEditor.document.lineCount;
+        const firstVisibleLine = visibleRange.start.line;
+        const scrollPercentage = totalLines > 0 ? firstVisibleLine / totalLines : 0;
+        this.panel.webview.postMessage({
+            command: 'scroll',
+            percentage: scrollPercentage
+        });
+    }
+    async updateEditorFromPreview(markdownContent) {
+        if (!this.currentEditor) {
+            return;
+        }
+        const document = this.currentEditor.document;
+        const fullRange = new vscode.Range(document.positionAt(0), document.positionAt(document.getText().length));
+        const edit = new vscode.WorkspaceEdit();
+        edit.replace(document.uri, fullRange, markdownContent);
+        const success = await vscode.workspace.applyEdit(edit);
+        if (success) {
+            console.log('Editor updated from preview');
+        }
+        else {
+            vscode.window.showErrorMessage('Failed to update editor from preview');
+        }
+    }
+    isEditorThemeDark() {
+        const theme = vscode.window.activeColorTheme;
+        return theme.kind === vscode.ColorThemeKind.Dark ||
+            theme.kind === vscode.ColorThemeKind.HighContrast;
+    }
+    getWebviewContent(html, editorIsDark, isEditMode) {
+        const previewTheme = editorIsDark ? 'light' : 'dark';
+        const hlTheme = previewTheme === 'dark' ? 'github-dark' : 'github';
+        return `<!DOCTYPE html>
+<html lang="en">
 <head>
-<meta charset="UTF-8" />
-<style>
-${styles}
-</style>
-
-<!-- Highlight.js CDN -->
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.7.0/styles/default.min.css">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.7.0/highlight.min.js"></script>
-
-<!-- MathJax -->
-<script>
-MathJax = {
-  tex: { inlineMath: [['$', '$']], displayMath: [['$$', '$$']] }
-};
-</script>
-<script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
-
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; 
+        style-src 'unsafe-inline' https://cdnjs.cloudflare.com; 
+        script-src 'unsafe-inline' https://cdnjs.cloudflare.com; 
+        img-src vscode-resource: https: data:;">
+    <title>Markdown Preview ${isEditMode ? '(Edit Mode)' : ''}</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/${hlTheme}.min.css">
+    <style>${this.getStyles(previewTheme, isEditMode)}</style>
 </head>
-<body>
-
-<div class="markdown-body">
-${html}
-</div>
-
-<script>
-const vscode = acquireVsCodeApi();
-
-// Highlight code blocks
-document.querySelectorAll('pre code').forEach((block) => {
-  hljs.highlightElement(block);
-});
-
-// Scroll sync
-window.addEventListener('message', event => {
-  const message = event.data;
-  if (message.command === 'scroll') {
-    const scrollHeight = document.documentElement.scrollHeight - window.innerHeight;
-    window.scrollTo(0, scrollHeight * message.percentage);
-  }
-});
-</script>
-
+<body class="vscode-body theme-${previewTheme} ${isEditMode ? 'edit-mode' : 'preview-mode'}">
+    <div id="toolbar">
+        <button id="toggleEditBtn" title="Toggle Edit Mode">
+            ${isEditMode ? '👁️ View Mode' : '✏️ Edit Mode'}
+        </button>
+        <button id="saveBtn" title="Save Changes" ${isEditMode ? '' : 'style="display: none;"'}>
+            💾 Save
+        </button>
+        <button id="boldBtn" title="Bold" ${isEditMode ? '' : 'style="display: none;"'}>
+            <b>B</b>
+        </button>
+        <button id="italicBtn" title="Italic" ${isEditMode ? '' : 'style="display: none;"'}>
+            <i>I</i>
+        </button>
+        <button id="linkBtn" title="Insert Link" ${isEditMode ? '' : 'style="display: none;"'}>
+            🔗
+        </button>
+        <button id="codeBtn" title="Insert Code" ${isEditMode ? '' : 'style="display: none;"'}>
+            &lt;/&gt;
+        </button>
+    </div>
+    
+    <div id="content-area">
+        ${isEditMode ?
+            `<div id="editable-content" contenteditable="true" class="editable-preview">${html}</div>` :
+            `<div id="preview-container">${html}</div>`}
+    </div>
+    
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/3.2.2/es5/tex-mml-chtml.min.js"></script>
+    <script>
+        (function() {
+            const vscode = acquireVsCodeApi();
+            let isScrolling = false;
+            let currentEditMode = ${isEditMode};
+            let saveTimeout = null;
+            
+            // Initialize
+            if (currentEditMode) {
+                setupEditMode();
+            } else {
+                setupPreviewMode();
+            }
+            
+            function setupEditMode() {
+                const editableDiv = document.getElementById('editable-content');
+                if (!editableDiv) return;
+                
+                // Focus and set cursor at end
+                editableDiv.focus();
+                if (window.getSelection) {
+                    const range = document.createRange();
+                    range.selectNodeContents(editableDiv);
+                    range.collapse(false);
+                    const selection = window.getSelection();
+                    selection.removeAllRanges();
+                    selection.addRange(range);
+                }
+                
+                // Auto-save on changes
+                editableDiv.addEventListener('input', debounce(() => {
+                    vscode.postMessage({
+                        command: 'htmlChanged',
+                        html: editableDiv.innerHTML
+                    });
+                }, 500));
+                
+                // Handle paste event to clean up formatting
+                editableDiv.addEventListener('paste', (e) => {
+                    e.preventDefault();
+                    const text = e.clipboardData.getData('text/plain');
+                    document.execCommand('insertText', false, text);
+                });
+                
+                // Toolbar functionality
+                document.getElementById('boldBtn').addEventListener('click', () => {
+                    document.execCommand('bold');
+                    editableDiv.focus();
+                });
+                
+                document.getElementById('italicBtn').addEventListener('click', () => {
+                    document.execCommand('italic');
+                    editableDiv.focus();
+                });
+                
+                document.getElementById('linkBtn').addEventListener('click', () => {
+                    const url = prompt('Enter URL:', 'https://');
+                    const text = prompt('Enter link text:', 'Link');
+                    if (url && text) {
+                        const link = '<a href="' + url + '">' + text + '</a>';
+                        document.execCommand('insertHTML', false, link);
+                    }
+                    editableDiv.focus();
+                });
+                
+                document.getElementById('codeBtn').addEventListener('click', () => {
+                    const code = prompt('Enter code:');
+                    const language = prompt('Enter language (optional):');
+                    const codeHtml = language ? 
+                        '<pre><code class="language-' + language + '">' + code + '</code></pre>' :
+                        '<pre><code>' + code + '</code></pre>';
+                    document.execCommand('insertHTML', false, codeHtml);
+                    editableDiv.focus();
+                });
+                
+                document.getElementById('saveBtn').addEventListener('click', () => {
+                    vscode.postMessage({
+                        command: 'htmlChanged',
+                        html: editableDiv.innerHTML
+                    });
+                    vscode.postMessage({
+                        command: 'alert',
+                        text: 'Changes saved!'
+                    });
+                });
+            }
+            
+            function setupPreviewMode() {
+                // Handle clicks on links
+                document.addEventListener('click', event => {
+                    const target = event.target;
+                    if (target.tagName === 'A' && target.href) {
+                        event.preventDefault();
+                        vscode.postMessage({
+                            command: 'alert',
+                            text: 'Link clicked: ' + target.href
+                        });
+                    }
+                });
+            }
+            
+            // Toggle edit mode button
+            document.getElementById('toggleEditBtn').addEventListener('click', () => {
+                vscode.postMessage({
+                    command: 'toggleEditMode'
+                });
+            });
+            
+            // Handle scroll sync from editor
+            window.addEventListener('message', event => {
+                const message = event.data;
+                
+                switch (message.command) {
+                    case 'scroll':
+                        if (!isScrolling) {
+                            syncScrollFromEditor(message.percentage);
+                        }
+                        break;
+                    case 'setInitialContent':
+                        if (currentEditMode && message.isEditMode) {
+                            const editableDiv = document.getElementById('editable-content');
+                            if (editableDiv) {
+                                editableDiv.innerHTML = message.html;
+                            }
+                        }
+                        break;
+                }
+            });
+            
+            function syncScrollFromEditor(percentage) {
+                const scrollHeight = document.documentElement.scrollHeight - window.innerHeight;
+                const targetScroll = Math.max(0, scrollHeight * percentage);
+                
+                isScrolling = true;
+                window.scrollTo({
+                    top: targetScroll,
+                    behavior: 'smooth'
+                });
+                
+                setTimeout(() => {
+                    isScrolling = false;
+                }, 100);
+            }
+            
+            // Render math with MathJax
+            if (window.MathJax) {
+                MathJax.typesetPromise().catch(err => {
+                    console.error('MathJax rendering error:', err);
+                });
+            }
+            
+            // Debounce function for auto-save
+            function debounce(func, wait) {
+                return function executedFunction(...args) {
+                    const later = () => {
+                        clearTimeout(saveTimeout);
+                        func(...args);
+                    };
+                    clearTimeout(saveTimeout);
+                    saveTimeout = setTimeout(later, wait);
+                };
+            }
+            
+            // Send initial content request
+            vscode.postMessage({
+                command: 'requestInitialContent'
+            });
+        })();
+    </script>
 </body>
-</html>
-`;
+</html>`;
+    }
+    getStyles(theme, isEditMode) {
+        const isDark = theme === 'dark';
+        const colors = {
+            bg: isDark ? '#1e1e1e' : '#ffffff',
+            fg: isDark ? '#d4d4d4' : '#333333',
+            heading: isDark ? '#ffffff' : '#000000',
+            border: isDark ? '#404040' : '#e1e4e8',
+            codeBg: isDark ? '#2d2d2d' : '#f6f8fa',
+            codeText: isDark ? '#e6e6e6' : '#24292e',
+            quoteFg: isDark ? '#8e8e8e' : '#6a737d',
+            linkColor: isDark ? '#58a6ff' : '#0366d6',
+            tableBg: isDark ? '#252525' : '#f6f8fa',
+            tableHeaderBg: isDark ? '#2d2d2d' : '#f6f8fa',
+            toolbarBg: isDark ? '#252525' : '#f5f5f5',
+            toolbarBorder: isDark ? '#333' : '#ddd',
+            buttonBg: isDark ? '#333' : '#eee',
+            buttonHover: isDark ? '#444' : '#ddd'
+        };
+        const editModeStyles = isEditMode ? `
+            #toolbar {
+                display: flex !important;
+                align-items: center;
+                gap: 8px;
+                padding: 10px;
+                background: ${colors.toolbarBg};
+                border-bottom: 1px solid ${colors.toolbarBorder};
+                position: sticky;
+                top: 0;
+                z-index: 1000;
+            }
+            
+            #toolbar button {
+                padding: 6px 12px;
+                background: ${colors.buttonBg};
+                border: 1px solid ${colors.border};
+                border-radius: 4px;
+                color: ${colors.fg};
+                cursor: pointer;
+                font-size: 14px;
+                transition: background 0.2s;
+            }
+            
+            #toolbar button:hover {
+                background: ${colors.buttonHover};
+            }
+            
+            .editable-preview {
+                min-height: 500px;
+                padding: 20px 30px;
+                outline: none;
+                max-width: 980px;
+                margin: 0 auto;
+            }
+            
+            .editable-preview:focus {
+                outline: none;
+            }
+            
+            .editable-preview h1,
+            .editable-preview h2,
+            .editable-preview h3,
+            .editable-preview h4,
+            .editable-preview h5,
+            .editable-preview h6 {
+                cursor: text;
+            }
+            
+            .editable-preview p,
+            .editable-preview li,
+            .editable-preview blockquote {
+                cursor: text;
+            }
+            
+            .editable-preview pre,
+            .editable-preview code {
+                cursor: text;
+                user-select: text;
+            }
+            
+            .editable-preview a {
+                cursor: pointer;
+            }
+            
+            .editable-preview [contenteditable="false"] {
+                cursor: default;
+            }
+        ` : `
+            #toolbar {
+                display: flex !important;
+                align-items: center;
+                gap: 8px;
+                padding: 10px;
+                background: ${colors.toolbarBg};
+                border-bottom: 1px solid ${colors.toolbarBorder};
+                position: sticky;
+                top: 0;
+                z-index: 1000;
+            }
+            
+            #toolbar button {
+                padding: 6px 12px;
+                background: ${colors.buttonBg};
+                border: 1px solid ${colors.border};
+                border-radius: 4px;
+                color: ${colors.fg};
+                cursor: pointer;
+                font-size: 14px;
+                transition: background 0.2s;
+            }
+            
+            #toolbar button:hover {
+                background: ${colors.buttonHover};
+            }
+            
+            #saveBtn, #boldBtn, #italicBtn, #linkBtn, #codeBtn {
+                display: none !important;
+            }
+        `;
+        return `
+* {
+    box-sizing: border-box;
+}
+
+html {
+    scroll-behavior: smooth;
+}
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe WPC', 'Segoe UI', system-ui, 'Ubuntu', 'Droid Sans', sans-serif;
+    font-size: 14px;
+    line-height: 1.6;
+    padding: 0;
+    margin: 0;
+    background-color: ${colors.bg};
+    color: ${colors.fg};
+    word-wrap: break-word;
+}
+
+#preview-container {
+    max-width: 980px;
+    margin: 0 auto;
+    padding: 20px 30px;
+}
+
+/* Headings */
+h1, h2, h3, h4, h5, h6 {
+    margin-top: 24px;
+    margin-bottom: 16px;
+    font-weight: 600;
+    line-height: 1.25;
+    color: ${colors.heading};
+}
+
+h1 { 
+    font-size: 2em; 
+    border-bottom: 1px solid ${colors.border};
+    padding-bottom: 0.3em;
+    margin-top: 0;
+}
+
+h2 { 
+    font-size: 1.5em; 
+    border-bottom: 1px solid ${colors.border};
+    padding-bottom: 0.3em;
+}
+
+h3 { font-size: 1.25em; }
+h4 { font-size: 1em; }
+h5 { font-size: 0.875em; }
+h6 { 
+    font-size: 0.85em; 
+    color: ${colors.quoteFg}; 
+}
+
+/* Paragraphs */
+p {
+    margin-top: 0;
+    margin-bottom: 16px;
+}
+
+/* Links */
+a {
+    color: ${colors.linkColor};
+    text-decoration: none;
+}
+
+a:hover {
+    text-decoration: underline;
+}
+
+/* Lists */
+ul, ol {
+    padding-left: 2em;
+    margin-top: 0;
+    margin-bottom: 16px;
+}
+
+li + li {
+    margin-top: 0.25em;
+}
+
+li > p {
+    margin-bottom: 0;
+}
+
+/* Code */
+code {
+    font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, Courier, monospace;
+    font-size: 85%;
+    background-color: ${colors.codeBg};
+    padding: 0.2em 0.4em;
+    border-radius: 3px;
+    color: ${colors.codeText};
+}
+
+pre {
+    background-color: ${colors.codeBg};
+    border-radius: 6px;
+    padding: 16px;
+    overflow: auto;
+    line-height: 1.45;
+    margin-top: 0;
+    margin-bottom: 16px;
+}
+
+pre code {
+    background-color: transparent;
+    padding: 0;
+    font-size: 100%;
+    border-radius: 0;
+    display: block;
+    overflow-x: auto;
+}
+
+/* Blockquotes */
+blockquote {
+    margin: 0 0 16px 0;
+    padding: 0 1em;
+    color: ${colors.quoteFg};
+    border-left: 0.25em solid ${colors.border};
+}
+
+blockquote > :first-child {
+    margin-top: 0;
+}
+
+blockquote > :last-child {
+    margin-bottom: 0;
+}
+
+/* Tables */
+table {
+    border-collapse: collapse;
+    border-spacing: 0;
+    width: 100%;
+    overflow: auto;
+    margin-top: 0;
+    margin-bottom: 16px;
+}
+
+table th {
+    font-weight: 600;
+    background-color: ${colors.tableHeaderBg};
+    padding: 6px 13px;
+    border: 1px solid ${colors.border};
+}
+
+table td {
+    padding: 6px 13px;
+    border: 1px solid ${colors.border};
+}
+
+table tr {
+    background-color: ${colors.bg};
+    border-top: 1px solid ${colors.border};
+}
+
+table tr:nth-child(2n) {
+    background-color: ${colors.tableBg};
+}
+
+/* Horizontal rule */
+hr {
+    height: 0.25em;
+    padding: 0;
+    margin: 24px 0;
+    background-color: ${colors.border};
+    border: 0;
+}
+
+/* Images */
+img {
+    max-width: 100%;
+    height: auto;
+    display: block;
+    margin: 16px 0;
+}
+
+/* Task lists */
+input[type="checkbox"] {
+    margin-right: 0.5em;
+}
+
+/* Syntax highlighting override */
+.hljs {
+    background: ${colors.codeBg} !important;
+    color: ${colors.codeText};
+}
+
+/* Math */
+.MathJax {
+    font-size: 1.1em !important;
+}
+
+mjx-container {
+    overflow-x: auto;
+    overflow-y: hidden;
+}
+
+/* Ensure proper spacing */
+* + h1,
+* + h2,
+* + h3,
+* + h4,
+* + h5,
+* + h6 {
+    margin-top: 24px;
+}
+
+li > p + p {
+    margin-top: 16px;
+}
+
+${editModeStyles}
+        `;
     }
     dispose() {
         if (this.panel) {
             this.panel.dispose();
+        }
+        while (this.disposables.length) {
+            const disposable = this.disposables.pop();
+            if (disposable) {
+                disposable.dispose();
+            }
         }
     }
 }

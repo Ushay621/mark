@@ -1,51 +1,187 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8" />
-    <meta http-equiv="Content-Security-Policy"
-        content="default-src 'none'; style-src 'unsafe-inline' ${cspSource}; img-src ${cspSource} https:; script-src ${cspSource};">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; 
+        style-src {{cspSource}} 'unsafe-inline' https://cdnjs.cloudflare.com; 
+        script-src {{cspSource}} 'unsafe-inline' https://cdnjs.cloudflare.com; 
+        img-src {{cspSource}} https: data:;">
     <title>Markdown Preview</title>
-
-    <style>
-        body {
-            font-family: var(--vscode-editor-font-family);
-            font-size: var(--vscode-editor-font-size);
-            color: var(--vscode-editor-foreground);
-            padding: 20px;
-        }
-
-        img {
-            max-width: 100%;
-        }
-
-        pre {
-            background: var(--vscode-editor-hoverHighlightBackground);
-            padding: 10px;
-            border-radius: 4px;
-            overflow-x: auto;
-        }
-
-        code {
-            font-family: var(--vscode-editor-font-family);
-        }
-    </style>
+    <link rel="stylesheet" href="{{highlightStyleUri}}">
+    <link rel="stylesheet" href="{{stylesUri}}">
 </head>
-
-<body>
-    <div id="root">Loading...</div>
-
+<body class="vscode-body theme-{{theme}}">
+    <div id="preview-container">
+        {{content}}
+    </div>
+    
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/3.2.2/es5/tex-mml-chtml.min.js"></script>
     <script>
-        const vscode = acquireVsCodeApi();
-
-        window.addEventListener("message", event => {
-            const { type, text } = event.data;
-
-            if (type === "update") {
-                document.getElementById("root").innerHTML = text;
+        (function() {
+            const vscode = acquireVsCodeApi();
+            let isScrolling = false;
+            
+            // Restore previous scroll position
+            const state = vscode.getState();
+            if (state && state.scrollTop) {
+                window.scrollTo(0, state.scrollTop);
             }
-        });
+            
+            // Save scroll position
+            window.addEventListener('scroll', () => {
+                vscode.setState({ scrollTop: window.scrollY });
+            });
+            
+            // Handle messages from extension
+            window.addEventListener('message', event => {
+                const message = event.data;
+                
+                switch (message.command) {
+                    case 'scroll':
+                        if (!isScrolling) {
+                            syncScrollFromEditor(message.percentage);
+                        }
+                        break;
+                    case 'update':
+                        updateContent(message.content);
+                        break;
+                }
+            });
+            
+            function syncScrollFromEditor(percentage) {
+                const scrollHeight = document.documentElement.scrollHeight - window.innerHeight;
+                const targetScroll = Math.max(0, scrollHeight * percentage);
+                
+                isScrolling = true;
+                window.scrollTo({
+                    top: targetScroll,
+                    behavior: 'smooth'
+                });
+                
+                setTimeout(() => {
+                    isScrolling = false;
+                }, 150);
+            }
+            
+            function updateContent(html) {
+                const container = document.getElementById('preview-container');
+                if (container) {
+                    const scrollPos = window.scrollY;
+                    container.innerHTML = html;
+                    
+                    // Re-render math
+                    if (window.MathJax) {
+                        MathJax.typesetPromise().catch(err => {
+                            console.error('MathJax error:', err);
+                        });
+                    }
+                    
+                    // Restore scroll position
+                    window.scrollTo(0, scrollPos);
+                }
+            }
+            
+            // Initial MathJax render
+            if (window.MathJax) {
+                MathJax.typesetPromise().catch(err => {
+                    console.error('MathJax error:', err);
+                });
+            }
+            
+            // Handle link clicks
+            document.addEventListener('click', event => {
+                let target = event.target;
+                
+                // Find parent anchor if clicked on child element
+                while (target && target.tagName !== 'A') {
+                    target = target.parentElement;
+                }
+                
+                if (target && target.tagName === 'A' && target.href) {
+                    event.preventDefault();
+                    
+                    if (target.href.startsWith('http://') || target.href.startsWith('https://')) {
+                        vscode.postMessage({
+                            command: 'openExternal',
+                            url: target.href
+                        });
+                    } else {
+                        vscode.postMessage({
+                            command: 'openFile',
+                            path: target.href
+                        });
+                    }
+                }
+            });
+        })();
     </script>
 </body>
 </html>
+
+
+
+<!-- {
+  "name": "advanced-markdown-preview",
+  "displayName": "Advanced Markdown Live Preview",
+  "description": "Markdown preview with inverted theme (dark editor → light preview, light editor → dark preview)",
+  "version": "1.0.0",
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "repository": {
+  "type": "git",
+  "url": "https://github.com/Ushay621/mark.git"
+}
+,
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onLanguage:markdown"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "markdown-preview.openPreview",
+        "title": "Open Preview to the Side",
+        "category": "Markdown Preview",
+        "icon": "$(open-preview)"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "markdown-preview.openPreview",
+        "key": "ctrl+shift+m",
+        "mac": "cmd+shift+m",
+        "when": "editorLangId == markdown"
+      }
+    ],
+    "menus": {
+      "editor/title": [
+        {
+          "command": "markdown-preview.openPreview",
+          "when": "editorLangId == markdown",
+          "group": "navigation"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "pretest": "npm run compile"
+  },
+  "devDependencies": {
+    "@types/node": "^18.0.0",
+    "@types/vscode": "^1.75.0",
+    "@types/marked": "^5.0.0",
+    "typescript": "^5.0.0"
+  },
+  "dependencies": {
+    "marked": "^9.1.6",
+    "highlight.js": "^11.9.0"
+  }
+} -->
