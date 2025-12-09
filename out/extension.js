@@ -34,35 +34,48 @@ var __importStar = (this && this.__importStar) || (function () {
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.activate = activate;
-exports.deactivate = deactivate;
 const vscode = __importStar(require("vscode"));
 const previewManager_1 = require("./previewManager");
 let previewManager;
+let autoOpenTimeout;
 function activate(context) {
     console.log('Advanced Markdown Preview extension is now active');
     previewManager = new previewManager_1.PreviewManager(context);
-    // Register command to open preview
     const openPreviewCommand = vscode.commands.registerCommand('markdown-preview.openPreview', () => {
         const editor = vscode.window.activeTextEditor;
-        if (!editor) {
-            vscode.window.showErrorMessage('No active editor found');
-            return;
-        }
-        if (editor.document.languageId !== 'markdown') {
+        if (!editor || editor.document.languageId !== 'markdown') {
             vscode.window.showErrorMessage('Active file is not a Markdown file');
             return;
         }
         previewManager.showPreview(editor);
     });
-    // Register command to toggle preview
     const togglePreviewCommand = vscode.commands.registerCommand('markdown-preview.togglePreview', () => {
         previewManager.togglePreview();
     });
-    context.subscriptions.push(openPreviewCommand, togglePreviewCommand, previewManager);
-}
-function deactivate() {
-    if (previewManager) {
-        previewManager.dispose();
-    }
+    // Auto-open preview when markdown file becomes active
+    const editorListener = vscode.window.onDidChangeActiveTextEditor(editor => {
+        if (editor && editor.document.languageId === 'markdown') {
+            previewManager.showPreview(editor);
+        }
+    });
+    // Auto-open preview when user starts typing in markdown file
+    const textChangeListener = vscode.workspace.onDidChangeTextDocument(e => {
+        const editor = vscode.window.activeTextEditor;
+        // Only auto-open for markdown files
+        if (editor &&
+            editor.document === e.document &&
+            editor.document.languageId === 'markdown' &&
+            !previewManager.hasPreview()) {
+            // Clear existing timeout
+            if (autoOpenTimeout) {
+                clearTimeout(autoOpenTimeout);
+            }
+            // Debounce: open preview after a short delay when user types
+            autoOpenTimeout = setTimeout(() => {
+                previewManager.showPreview(editor);
+            }, 300); // 300ms delay to avoid opening on every keystroke
+        }
+    });
+    context.subscriptions.push(openPreviewCommand, togglePreviewCommand, editorListener, textChangeListener, previewManager);
 }
 //# sourceMappingURL=extension.js.map

@@ -13,9 +13,12 @@
   "categories": [
     "Other"
   ],
-  "activationEvents": [
-    "onLanguage:markdown"
-  ],
+ "activationEvents": [
+  "onLanguage:markdown",
+  "onCommand:extension.showPreview",
+  "onCommand:extension.togglePreview",
+  "onCommand:extension.toggleEditMode"
+],
   "main": "./out/extension.js",
   "contributes": {
     "commands": [
